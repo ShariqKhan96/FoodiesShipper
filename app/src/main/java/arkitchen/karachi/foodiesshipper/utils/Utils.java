@@ -93,11 +93,15 @@ public class Utils {
 
     public String convertcodeToStatus(String status) {
         if (status.equals("0"))
-            return "Order Pending";
+            return "Pending";
         if (status.equals("1"))
-            return "On My Way";
+            return "Accepted";
         if (status.equals("2"))
-            return "Shipped";
+            return "Rejected";
+        if (status.equals("3"))
+            return "Shipping";
+        if (status.equals("4"))
+            return "Delivered";
         return "null";
     }
 }

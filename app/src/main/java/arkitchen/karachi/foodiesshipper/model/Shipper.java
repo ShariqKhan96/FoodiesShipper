@@ -2,12 +2,14 @@ package arkitchen.karachi.foodiesshipper.model;
 
 public class Shipper {
     public String active, name, password, phone;
+    public Token token;
 
     public Shipper() {
     }
 
-    public Shipper(String active, String name, String password, String phone) {
+    public Shipper(String active, String name, String password, String phone,Token token) {
         this.active = active;
+        this.token = token;
         this.name = name;
         this.password = password;
         this.phone = phone;

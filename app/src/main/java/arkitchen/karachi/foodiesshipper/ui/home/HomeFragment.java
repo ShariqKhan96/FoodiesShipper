@@ -27,12 +27,15 @@ import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
+import com.google.firebase.iid.FirebaseInstanceId;
+import com.google.firebase.iid.InstanceIdResult;
 import com.karumi.dexter.Dexter;
 import com.karumi.dexter.PermissionToken;
 import com.karumi.dexter.listener.PermissionDeniedResponse;
@@ -50,15 +53,27 @@ import java.util.Locale;
 import arkitchen.karachi.foodiesshipper.LoginActivity;
 import arkitchen.karachi.foodiesshipper.MainActivity;
 import arkitchen.karachi.foodiesshipper.R;
+import arkitchen.karachi.foodiesshipper.Remote.APIService;
+import arkitchen.karachi.foodiesshipper.Remote.RetrofitClient;
 import arkitchen.karachi.foodiesshipper.Splash;
+import arkitchen.karachi.foodiesshipper.common.Constants;
 import arkitchen.karachi.foodiesshipper.dataprovider.MyLocationProvider;
 import arkitchen.karachi.foodiesshipper.interfaces.ILocationListener;
+import arkitchen.karachi.foodiesshipper.model.MyResponse;
+import arkitchen.karachi.foodiesshipper.model.Notification;
 import arkitchen.karachi.foodiesshipper.model.Order;
 import arkitchen.karachi.foodiesshipper.model.Request;
+import arkitchen.karachi.foodiesshipper.model.Sender;
+import arkitchen.karachi.foodiesshipper.model.Token;
+import arkitchen.karachi.foodiesshipper.model.User;
 import arkitchen.karachi.foodiesshipper.services.TrackingService;
 import arkitchen.karachi.foodiesshipper.utils.PrefUtils;
 import arkitchen.karachi.foodiesshipper.utils.Utils;
 import arkitchen.karachi.foodiesshipper.viewholders.OrderViewHolder;
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
+import retrofit2.Retrofit;
 
 public class HomeFragment extends Fragment {
 
@@ -83,7 +98,18 @@ public class HomeFragment extends Fragment {
         recyclerView.setLayoutManager(new LinearLayoutManager(context));
         databaseReference = FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments");
         loadData();
+        updateToken();
         return root;
+    }
+
+    private void updateToken() {
+        FirebaseInstanceId.getInstance().getInstanceId().addOnSuccessListener(new OnSuccessListener<InstanceIdResult>() {
+            @Override
+            public void onSuccess(InstanceIdResult instanceIdResult) {
+                Token token = new Token(instanceIdResult.getToken(), false);
+                FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("token").setValue(token);
+            }
+        });
     }
 
     private void loadData() {
@@ -96,7 +122,7 @@ public class HomeFragment extends Fragment {
         firebaseRecyclerAdapter = new FirebaseRecyclerAdapter<Request, OrderViewHolder>(options) {
             @Override
             protected void onBindViewHolder(@NonNull OrderViewHolder viewHolder, int position, @NonNull Request model) {
-                viewHolder.orderName.setText(model.name);
+                viewHolder.orderName.setText("#" + model.orderId);
                 viewHolder.orderPhone.setText(model.phone);
 
 //                if(model.delivery_time!=null)
@@ -109,23 +135,22 @@ public class HomeFragment extends Fragment {
                 String date = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(calendar.getTime());
 
                 viewHolder.deliver_at.setText("Deliver At: " + date);
-                viewHolder.orderStatus.setText(Utils.getInstance().convertcodeToStatus(model.status));
+                viewHolder.orderStatus.setText(model.name);
                 viewHolder.orderAddress.setText(model.address);
 
-                if (model.status.equals("2")) {
+                if (model.punch_status.equals("2")) {
                     viewHolder.start.setVisibility(View.GONE);
                     viewHolder.end.setVisibility(View.GONE);
                     viewHolder.directions.setVisibility(View.GONE);
                     viewHolder.call.setVisibility(View.GONE);
-                } else if (model.status.equals("1")) {
+                } else if (model.punch_status.equals("1")) {
                     viewHolder.start.setVisibility(View.GONE);
                     viewHolder.end.setVisibility(View.VISIBLE);
                     viewHolder.directions.setVisibility(View.VISIBLE);
                     viewHolder.call.setVisibility(View.VISIBLE);
                 } else {
-
                     viewHolder.start.setVisibility(View.VISIBLE);
-                    viewHolder.end.setVisibility(View.VISIBLE);
+                    viewHolder.end.setVisibility(View.GONE);
                     viewHolder.directions.setVisibility(View.VISIBLE);
                     viewHolder.call.setVisibility(View.VISIBLE);
                 }
@@ -226,32 +251,253 @@ public class HomeFragment extends Fragment {
     private void changeAssignmentStatus(Request model, String status) {
         if (status.equals("start")) {
             Utils.getInstance().showLoader(context);
-            FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments")
+            FirebaseDatabase.getInstance().getReference("Requests")
                     .child(model.orderId)
-                    .child("status").setValue("1").addOnCompleteListener(new OnCompleteListener<Void>() {
+                    .child("punch_status").setValue("1").addOnCompleteListener(new OnCompleteListener<Void>() {
                 @Override
                 public void onComplete(@NonNull Task<Void> task) {
                     Utils.getInstance().dismissLoader();
-                    if (task.isSuccessful()) {
-                        Toast.makeText(context, "Shipping Started!", Toast.LENGTH_SHORT).show();
-                        ContextCompat.startForegroundService(context, new Intent(context, TrackingService.class));
-                    } else
-                        Toast.makeText(context, "Shipping failed to start!", Toast.LENGTH_SHORT).show();
+                    FirebaseDatabase.getInstance().getReference("Requests")
+                            .child(model.orderId)
+                            .child("status").setValue("3").addOnCompleteListener(new OnCompleteListener<Void>() {
+                        @Override
+                        public void onComplete(@NonNull Task<Void> task) {
+                            if (task.isSuccessful()) {
+
+
+                                Retrofit retrofit = RetrofitClient.getClient(Constants.FCM_BASE_URL);
+                                APIService apiService = retrofit.create(APIService.class);
+                                FirebaseDatabase.getInstance().getReference("User")
+                                        .addListenerForSingleValueEvent(new ValueEventListener() {
+                                            @Override
+                                            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                                                for (DataSnapshot data : snapshot.getChildren()) {
+                                                    User user = data.getValue(User.class);
+                                                    if (user.Phone.equals(model.phone)) {
+
+                                                        if (user.token != null) {
+                                                            String message = "Tracking of your order # " + model.orderId + " is available now!";
+                                                            String title = "Tracking";
+                                                            apiService.sendNotification(new Sender(user.token.token, new Notification(message, title)))
+                                                                    .enqueue(new Callback<MyResponse>() {
+                                                                        @Override
+                                                                        public void onResponse(Call<MyResponse> call, Response<MyResponse> response) {
+                                                                            Log.e("code", response.code() + "");
+                                                                            if (response.isSuccessful()) {
+                                                                                //Toast.makeText(context, "Promotion sent successfully!", Toast.LENGTH_SHORT).show();
+
+                                                                            }
+//                                                                            else
+//                                                                                Toast.makeText(context, "Something went wrong", Toast.LENGTH_SHORT).show();
+                                                                        }
+
+                                                                        @Override
+                                                                        public void onFailure(Call<MyResponse> call, Throwable t) {
+
+                                                                        }
+                                                                    });
+                                                        }
+
+                                                    } else {
+
+                                                    }
+                                                }
+                                            }
+
+                                            @Override
+                                            public void onCancelled(@NonNull DatabaseError error) {
+
+                                            }
+                                        });
+
+                                FirebaseDatabase.getInstance().getReference("User")
+                                        .addListenerForSingleValueEvent(new ValueEventListener() {
+                                            @Override
+                                            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                                                for (DataSnapshot data : snapshot.getChildren()) {
+                                                    User user = data.getValue(User.class);
+                                                    if (user.isStaff.equals("true")) {
+
+                                                        if (user.token != null) {
+                                                            String message = "Tracking of order # " + model.orderId + " is available now!";
+                                                            String title = "Tracking";
+                                                            apiService.sendNotification(new Sender(user.token.token, new Notification(message, title)))
+                                                                    .enqueue(new Callback<MyResponse>() {
+                                                                        @Override
+                                                                        public void onResponse(Call<MyResponse> call, Response<MyResponse> response) {
+                                                                            Log.e("code", response.code() + "");
+                                                                            if (response.isSuccessful()) {
+                                                                                //Toast.makeText(context, "Promotion sent successfully!", Toast.LENGTH_SHORT).show();
+
+                                                                            }
+                                                                            //else
+                                                                            // Toast.makeText(context, "Something went wrong", Toast.LENGTH_SHORT).show();
+                                                                        }
+
+                                                                        @Override
+                                                                        public void onFailure(Call<MyResponse> call, Throwable t) {
+
+                                                                        }
+                                                                    });
+                                                        }
+
+                                                    } else {
+
+                                                    }
+                                                }
+                                            }
+
+                                            @Override
+                                            public void onCancelled(@NonNull DatabaseError error) {
+
+                                            }
+                                        });
+
+                                //apiService.sendNotification(new Sender())
+
+                                FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments")
+                                        .child(model.orderId)
+                                        .child("status").setValue("3");
+
+
+                                FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments")
+                                        .child(model.orderId)
+                                        .child("punch_status").setValue("1");
+
+//                                FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments")
+//                                        .child(model.orderId)
+//                                        .child("status").setValue("4");
+
+
+                                Toast.makeText(context, "Shipping Started!", Toast.LENGTH_SHORT).show();
+                                ContextCompat.startForegroundService(context, new Intent(context, TrackingService.class));
+                            } else
+                                Toast.makeText(context, "Shipping failed to start!", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+
+
                 }
             });
         } else {
-            model.status = "2";
+            model.punch_status = "2";
             model.delivery_time = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Calendar.getInstance().getTime());
+//            FirebaseDatabase.getInstance().getReference("Requests")
+//                    .child(model.orderId)
+//                    .setValue(model).addOnCompleteListener(task -> {
+
             FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments")
                     .child(model.orderId)
-                    .setValue(model).addOnCompleteListener(task -> {
-                if (task.isSuccessful())
-                    Toast.makeText(context, "Shipping Completed!", Toast.LENGTH_SHORT).show();
-                else
-                    Toast.makeText(context, "Shipping Completion Failed!", Toast.LENGTH_SHORT).show();
+                    .setValue(model);
 
-                context.stopService(new Intent(context, TrackingService.class));
-            });
+            FirebaseDatabase.getInstance().getReference("Shippers").child(PrefUtils.getString("phone", context)).child("assignments")
+                    .child(model.orderId)
+                    .child("status").setValue("4");
+
+            FirebaseDatabase.getInstance().getReference("Requests")
+                    .child(model.orderId)
+                    .child("status").setValue("4");
+
+            FirebaseDatabase.getInstance().getReference("Requests")
+                    .child(model.orderId)
+                    .child("punch_status").setValue("2");
+
+            Retrofit retrofit = RetrofitClient.getClient(Constants.FCM_BASE_URL);
+            APIService apiService = retrofit.create(APIService.class);
+            FirebaseDatabase.getInstance().getReference("User")
+                    .addListenerForSingleValueEvent(new ValueEventListener() {
+                        @Override
+                        public void onDataChange(@NonNull DataSnapshot snapshot) {
+                            for (DataSnapshot data : snapshot.getChildren()) {
+                                User user = data.getValue(User.class);
+                                if (user.Phone.equals(model.phone)) {
+
+                                    if (user.token != null) {
+                                        String message = "Your order # " + model.orderId + " has been delivered!";
+                                        String title = "DELIVERY ALERT";
+                                        apiService.sendNotification(new Sender(user.token.token, new Notification(message, title)))
+                                                .enqueue(new Callback<MyResponse>() {
+                                                    @Override
+                                                    public void onResponse(Call<MyResponse> call, Response<MyResponse> response) {
+                                                        Log.e("code", response.code() + "");
+                                                        if (response.isSuccessful()) {
+                                                            //Toast.makeText(context, "Promotion sent successfully!", Toast.LENGTH_SHORT).show();
+
+                                                        }
+//                                                                            else
+//                                                                                Toast.makeText(context, "Something went wrong", Toast.LENGTH_SHORT).show();
+                                                    }
+
+                                                    @Override
+                                                    public void onFailure(Call<MyResponse> call, Throwable t) {
+
+                                                    }
+                                                });
+                                    }
+
+                                } else {
+
+                                }
+                            }
+                        }
+
+                        @Override
+                        public void onCancelled(@NonNull DatabaseError error) {
+
+                        }
+                    });
+
+            FirebaseDatabase.getInstance().getReference("User")
+                    .addListenerForSingleValueEvent(new ValueEventListener() {
+                        @Override
+                        public void onDataChange(@NonNull DataSnapshot snapshot) {
+                            for (DataSnapshot data : snapshot.getChildren()) {
+                                User user = data.getValue(User.class);
+                                if (user.isStaff.equals("true")) {
+
+                                    if (user.token != null) {
+                                        String message = "Order # " + model.orderId + " has been delivered to user!";
+                                        String title = "DELIVERY CONFIRMATION";
+                                        apiService.sendNotification(new Sender(user.token.token, new Notification(message, title)))
+                                                .enqueue(new Callback<MyResponse>() {
+                                                    @Override
+                                                    public void onResponse(Call<MyResponse> call, Response<MyResponse> response) {
+                                                        Log.e("code", response.code() + "");
+                                                        if (response.isSuccessful()) {
+                                                            //Toast.makeText(context, "Promotion sent successfully!", Toast.LENGTH_SHORT).show();
+
+                                                        }
+                                                        //else
+                                                        // Toast.makeText(context, "Something went wrong", Toast.LENGTH_SHORT).show();
+                                                    }
+
+                                                    @Override
+                                                    public void onFailure(Call<MyResponse> call, Throwable t) {
+
+                                                    }
+                                                });
+                                    }
+
+                                } else {
+
+                                }
+                            }
+                        }
+
+                        @Override
+                        public void onCancelled(@NonNull DatabaseError error) {
+
+                        }
+                    });
+
+
+//            if (task.isSuccessful())
+            Toast.makeText(context, "Shipping Completed!", Toast.LENGTH_SHORT).show();
+//            else
+//                Toast.makeText(context, "Shipping Completion Failed!", Toast.LENGTH_SHORT).show();
+
+            context.stopService(new Intent(context, TrackingService.class));
+//            });
         }
 
         firebaseRecyclerAdapter.notifyDataSetChanged();

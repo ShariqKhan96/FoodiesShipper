@@ -11,4 +11,5 @@
     <string name="menu_gallery">Gallery</string>
     <string name="menu_slideshow">Slideshow</string>
     <string name="default_notification_channel_id">SHIPPER_FOOD_CH1</string>
+    <string name="notifcation_channel">FOODIES_CHANNEL_03</string>
 </resources>
